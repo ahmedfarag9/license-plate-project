@@ -1,0 +1,58 @@
+body {
+    font-family: Arial, sans-serif;
+    text-align: center;
+    margin: 20px;
+    background-color: #f4f4f9;
+    color: #333;
+}
+
+h1 {
+    font-size: 2.5em;
+    color: #444;
+}
+
+h2 {
+    font-size: 1.8em;
+    color: #555;
+}
+
+p {
+    font-size: 1.2em;
+    margin: 10px 0;
+}
+
+img {
+    max-width: 500px;
+    height: auto;
+    border: 2px solid #ddd;
+    border-radius: 10px;
+    margin: 15px 0;
+}
+
+div {
+    margin: 20px;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    background-color: #fff;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+}
+
+.image-container {
+    width: 500px; /* Match the image width */
+    height: 300px; /* Fixed height to prevent layout shifts */
+    border: 2px solid #ddd;
+    border-radius: 10px;
+    margin: 15px auto; /* Center the container */
+    background-color: #f4f4f4; /* Placeholder background color */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden; /* Prevent image overflow */
+}
+
+.image-container img {
+    width: 100%; /* Ensure the image fits within the container */
+    height: 100%; /* Scale image to container size */
+    object-fit: cover; /* Crop the image to fit without distortion */
+}
