@@ -19,7 +19,7 @@ setInterval(async () => {
         if (response.ok) {
             const data = await response.json()
             document.getElementById('status').innerText = data.status
-            document.getElementById('captured-image').src = data.image
+            document.getElementById('captured-image').src = data.image + `?t=${new Date().getTime()}`
             document.getElementById('license-plate').innerText = data.license_plate
 
             // Update Plate Status

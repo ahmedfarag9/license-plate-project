@@ -6,6 +6,8 @@ import os
 import RPi.GPIO as GPIO
 import logging
 import atexit
+from picamera2 import Picamera2
+import datetime
 
 app = Flask(__name__)
 
@@ -24,7 +26,11 @@ servo_pwm.start(0)  # Initialize with 0 duty cycle
 # Lock for thread-safe GPIO operations
 gpio_lock = Lock()
 
-# Simulated detection data
+# Initialize Picamera2
+picam2 = Picamera2()
+picam2.start()
+
+# Simulated detection data (can be removed if using real images)
 test_data = [
     {"image": "/static/images/test_license_plate1.jpg", "license_plate": "VHK-1164"},
     {"image": "/static/images/Cars118.png", "license_plate": "JA62 UAR"},
@@ -57,21 +63,43 @@ def check_proximity():
         detection_state["status"] = "No vehicle detected."
         return False
 
-# Camera Capture Dummy Function
+# Real Camera Capture Function
 def capture_image():
     detection_state["status"] = "Capturing image..."
-    logging.info("Simulating image capture")
-    selected_data = random.choice(test_data)
-    detection_state["image"] = selected_data["image"]
-    return selected_data
+    logging.info("Starting image capture")
+    
+    # Generate a unique filename based on the current timestamp
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"car_{timestamp}.jpg"
+    filepath = os.path.join("static", "images", filename)
+    
+    try:
+        # Capture the image and save it to the specified filepath
+        picam2.capture_file(filepath)
+        logging.info(f"Image captured and saved as {filename}")
+        
+        # Update the detection state with the new image path
+        detection_state["image"] = f"/static/images/{filename}"
+        
+        # For demonstration, randomly assign a license plate (remove if using actual OCR)
+        selected_data = random.choice(test_data)
+        # detection_state["license_plate"] = selected_data["license_plate"]
+        return selected_data
+    except Exception as e:
+        logging.error(f"Error capturing image: {e}")
+        detection_state["status"] = "Image capture failed."
+        return None
 
 # Processing Image Dummy Function
 def process_image(image_path):
     detection_state["status"] = "Processing image..."
     logging.info(f"Processing image: {image_path}")
     time.sleep(4)  # Simulate delay for processing
+    
+    # Simulate license plate recognition (replace with actual OCR in production)
     selected_data = next((data for data in test_data if data["image"] == image_path), None)
     detection_state["license_plate"] = selected_data["license_plate"] if selected_data else "Unknown Plate"
+    
     # Check if the plate is known
     detection_state["plate_known"] = detection_state["license_plate"] in known_plates
     plate_status = "Known" if detection_state["plate_known"] else "Unknown"
@@ -137,19 +165,20 @@ def main_flow():
             if check_proximity():
                 time.sleep(2)  # Simulate delay for proximity check
                 captured_data = capture_image()
-                time.sleep(2)  # Simulate delay for capturing image
-                process_image(captured_data["image"])
-                time.sleep(1)  # Short delay before checking database
+                if captured_data:
+                    time.sleep(2)  # Simulate delay for capturing image
+                    process_image(captured_data["image"])
+                    time.sleep(1)  # Short delay before checking database
 
-                # Check license plate in database
-                if check_plate_in_database(detection_state["license_plate"]):
-                    open_gate()
-                    time.sleep(5)  # Short delay before closing gate
-                    close_gate()
-                else:
-                    logging.warning("License plate not recognized. Gate remains closed.")
-                    with gpio_lock:
-                        detection_state["gate_status"] = "Gate Closed - Unknown Plate"
+                    # Check license plate in database
+                    if check_plate_in_database(detection_state["license_plate"]):
+                        open_gate()
+                        time.sleep(2)  # Short delay before closing gate
+                        close_gate()
+                    else:
+                        logging.warning("License plate not recognized. Gate remains closed.")
+                        with gpio_lock:
+                            detection_state["gate_status"] = "Gate Closed - Unknown Plate"
             else:
                 logging.info("No vehicle detected. Resetting.")
         else:
@@ -181,20 +210,23 @@ def toggle_detection():
     with gpio_lock:
         detection_state["is_running"] = request.json.get("isDetectionRunning", True)
         logging.info(f"Detection {'started' if detection_state['is_running'] else 'stopped'}.")
-        return jsonify({"status": detection_state["status"],
-                        "gate_status": detection_state["gate_status"],
-                        "license_plate": detection_state["license_plate"],
-                        "plate_known": detection_state["plate_known"],
-                        "image": detection_state["image"]})
+        return jsonify({
+            "status": detection_state["status"],
+            "gate_status": detection_state["gate_status"],
+            "license_plate": detection_state["license_plate"],
+            "plate_known": detection_state["plate_known"],
+            "image": detection_state["image"]
+        })
 
-# Cleanup GPIO on application exit
-def cleanup_gpio():
-    logging.info("Cleaning up GPIO...")
+# Cleanup GPIO and Camera on application exit
+def cleanup_resources():
+    logging.info("Cleaning up resources...")
     servo_pwm.stop()
     GPIO.cleanup()
-    logging.info("GPIO cleanup complete.")
+    picam2.stop()
+    logging.info("GPIO and Camera cleanup complete.")
 
-atexit.register(cleanup_gpio)
+atexit.register(cleanup_resources)
 
 if __name__ == "__main__":
     try:
@@ -202,4 +234,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logging.info("Application interrupted by user.")
     finally:
-        cleanup_gpio()
+        cleanup_resources()
