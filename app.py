@@ -5,6 +5,7 @@ from threading import Thread, Lock
 import os
 import RPi.GPIO as GPIO
 import logging
+import atexit
 
 app = Flask(__name__)
 
@@ -31,11 +32,16 @@ test_data = [
     {"image": "/static/images/Cars1.png", "license_plate": "PG-MN112"}
 ]
 
+# Known license plates for simulation
+known_plates = {"VHK-1164", "JA62 UAR", "R96-0YR", "PG-MN112"}
+
 # Detection state
 detection_state = {
     "status": "No vehicle detected.",
     "image": "/static/images/NoVehicleDetected.jpg",
     "license_plate": "",
+    "plate_known": False,
+    "gate_status": "Gate Closed",
     "is_running": True
 }
 
@@ -66,7 +72,11 @@ def process_image(image_path):
     time.sleep(4)  # Simulate delay for processing
     selected_data = next((data for data in test_data if data["image"] == image_path), None)
     detection_state["license_plate"] = selected_data["license_plate"] if selected_data else "Unknown Plate"
-    detection_state["status"] = f"License plate detected: {detection_state['license_plate']}"
+    # Check if the plate is known
+    detection_state["plate_known"] = detection_state["license_plate"] in known_plates
+    plate_status = "Known" if detection_state["plate_known"] else "Unknown"
+    detection_state["status"] = f"License plate detected: {detection_state['license_plate']} ({plate_status})"
+    logging.info(f"License plate status: {plate_status}")
 
 # Servo Control Functions
 def set_servo_angle(angle):
@@ -83,20 +93,33 @@ def set_servo_angle(angle):
 
 def open_gate():
     logging.info("Opening the gate...")
+    with gpio_lock:
+        detection_state["gate_status"] = "Gate Opening"
     set_servo_angle(90)  # Adjust angle as per your servo's configuration
+    with gpio_lock:
+        detection_state["gate_status"] = "Gate Opened"
     logging.info("Gate opened.")
 
 def close_gate():
     logging.info("Closing the gate...")
+    with gpio_lock:
+        detection_state["gate_status"] = "Gate Closing"
     set_servo_angle(0)  # Adjust angle as per your servo's configuration
+    with gpio_lock:
+        detection_state["gate_status"] = "Gate Closed"
     logging.info("Gate closed.")
 
 def check_plate_in_database(license_plate):
     logging.info(f"Checking database for license plate: {license_plate}")
     time.sleep(2)  # Simulate delay for database check
     # Implement actual database check logic here
-    # For demonstration, we'll assume all plates are valid
-    return True
+    # For demonstration, we'll assume all plates in known_plates are valid
+    is_known = license_plate in known_plates
+    if is_known:
+        logging.info(f"License plate {license_plate} is known.")
+    else:
+        logging.warning(f"License plate {license_plate} is unknown.")
+    return is_known
 
 # Flow Controller Function
 def main_flow():
@@ -105,7 +128,9 @@ def main_flow():
             with gpio_lock:
                 detection_state["image"] = "/static/images/NoVehicleDetected.jpg"
                 detection_state["license_plate"] = ""
+                detection_state["plate_known"] = False
                 detection_state["status"] = "No vehicle detected."
+                detection_state["gate_status"] = "Gate Closed"
 
             time.sleep(5)  # Simulate delay for waiting
 
@@ -119,11 +144,12 @@ def main_flow():
                 # Check license plate in database
                 if check_plate_in_database(detection_state["license_plate"]):
                     open_gate()
-                    time.sleep(2)  # Short delay before checking database
+                    time.sleep(5)  # Short delay before closing gate
                     close_gate()
-
                 else:
                     logging.warning("License plate not recognized. Gate remains closed.")
+                    with gpio_lock:
+                        detection_state["gate_status"] = "Gate Closed - Unknown Plate"
             else:
                 logging.info("No vehicle detected. Resetting.")
         else:
@@ -155,7 +181,11 @@ def toggle_detection():
     with gpio_lock:
         detection_state["is_running"] = request.json.get("isDetectionRunning", True)
         logging.info(f"Detection {'started' if detection_state['is_running'] else 'stopped'}.")
-        return jsonify({"status": detection_state["status"]})
+        return jsonify({"status": detection_state["status"],
+                        "gate_status": detection_state["gate_status"],
+                        "license_plate": detection_state["license_plate"],
+                        "plate_known": detection_state["plate_known"],
+                        "image": detection_state["image"]})
 
 # Cleanup GPIO on application exit
 def cleanup_gpio():
@@ -164,7 +194,6 @@ def cleanup_gpio():
     GPIO.cleanup()
     logging.info("GPIO cleanup complete.")
 
-import atexit
 atexit.register(cleanup_gpio)
 
 if __name__ == "__main__":

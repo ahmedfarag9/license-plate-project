@@ -56,3 +56,43 @@ div {
     height: 100%; /* Scale image to container size */
     object-fit: cover; /* Crop the image to fit without distortion */
 }
+
+/* New Styles for Status Indicators */
+.status-section {
+    margin: 20px;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    background-color: #fff;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+}
+
+.status-section h2 {
+    color: #555;
+}
+
+.status-section h2.status {
+    color: yellow;
+}
+
+.status-section h2.known {
+    color: green;
+}
+
+.status-section h2.unknown {
+    color: red;
+}
+
+.status-section h2.gate-opening,
+.status-section h2.gate-closing {
+    color: orange;
+}
+
+.status-section h2.gate-opened,
+.status-section h2.gate-closed {
+    color: green;
+}
+
+.status-section h2.gate-closed-unknown {
+    color: red;
+}
