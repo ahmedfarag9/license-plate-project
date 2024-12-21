@@ -8,6 +8,8 @@ import logging
 import atexit
 from picamera2 import Picamera2
 import datetime
+import mysql.connector
+from mysql.connector import errorcode
 
 app = Flask(__name__)
 
@@ -38,6 +40,29 @@ gpio_lock = Lock()
 # Initialize Picamera2
 picam2 = Picamera2()
 picam2.start()
+
+# MySQL Configuration
+DB_CONFIG = {
+    'user': 'user',
+    'password': 'psw',
+    'host': '192.168.225.12',  # e.g., 'localhost' if running on the same machine
+    'port': 3307,              # Added port
+    'database': 'db',
+    'raise_on_warnings': True
+}
+
+def get_db_connection():
+    try:
+        cnx = mysql.connector.connect(**DB_CONFIG)
+        return cnx
+    except mysql.connector.Error as err:
+        if err.errno == errorcode.ER_ACCESS_DENIED_ERROR:
+            logging.error("Something is wrong with your MySQL user name or password")
+        elif err.errno == errorcode.ER_BAD_DB_ERROR:
+            logging.error("Database does not exist")
+        else:
+            logging.error(err)
+        return None
 
 # Simulated detection data (can be removed if using real images)
 test_data = [
@@ -131,13 +156,13 @@ def capture_image():
 
         # For demonstration, randomly assign a license plate (remove if using actual OCR)
         selected_data = random.choice(test_data)
-        # detection_state["license_plate"] = selected_data["license_plate"]
         return selected_data
     except Exception as e:
         logging.error(f"Error capturing image: {e}")
         detection_state["status"] = "Image capture failed."
         return None
-# Processing Image Dummy Function
+
+# Processing Image Function
 def process_image(image_path):
     detection_state["status"] = "Processing image..."
     logging.info(f"Processing image: {image_path}")
@@ -148,7 +173,7 @@ def process_image(image_path):
     detection_state["license_plate"] = selected_data["license_plate"] if selected_data else "Unknown Plate"
 
     # Check if the plate is known
-    detection_state["plate_known"] = detection_state["license_plate"] in known_plates
+    detection_state["plate_known"] = check_plate_in_database(detection_state["license_plate"])
     plate_status = "Known" if detection_state["plate_known"] else "Unknown"
     detection_state["status"] = f"License plate detected: {detection_state['license_plate']} ({plate_status})"
     logging.info(f"License plate status: {plate_status}")
@@ -186,15 +211,46 @@ def close_gate():
 
 def check_plate_in_database(license_plate):
     logging.info(f"Checking database for license plate: {license_plate}")
-    time.sleep(2)  # Simulate delay for database check
-    # Implement actual database check logic here
-    # For demonstration, we'll assume all plates in known_plates are valid
-    is_known = license_plate in known_plates
-    if is_known:
-        logging.info(f"License plate {license_plate} is known.")
-    else:
-        logging.warning(f"License plate {license_plate} is unknown.")
-    return is_known
+    try:
+        cnx = get_db_connection()
+        if not cnx:
+            logging.error("Failed to connect to the database.")
+            return False
+
+        cursor = cnx.cursor()
+
+        # Check if the license plate is in known_plates
+        query = "SELECT id FROM known_plates WHERE license_plate = %s"
+        cursor.execute(query, (license_plate,))
+        result = cursor.fetchone()
+
+        is_known = result is not None
+        if is_known:
+            logging.info(f"License plate {license_plate} is known.")
+        else:
+            logging.warning(f"License plate {license_plate} is unknown.")
+
+        # Insert the detected plate into detected_plates table
+        insert_query = """
+            INSERT INTO detected_plates (license_plate, is_known, image_path)
+            VALUES (%s, %s, %s)
+        """
+        cursor.execute(insert_query, (
+            license_plate,
+            is_known,
+            detection_state["image"]  # Assuming image_path is stored in detection_state
+        ))
+        cnx.commit()
+        cursor.close()
+        cnx.close()
+        return is_known
+
+    except mysql.connector.Error as err:
+        logging.error(f"MySQL error: {err}")
+        return False
+    except Exception as e:
+        logging.error(f"Error checking license plate in database: {e}")
+        return False
 
 # Flow Controller Function
 def main_flow():
@@ -222,7 +278,7 @@ def main_flow():
                         time.sleep(1)  # Short delay before checking database
 
                         # Check license plate in database
-                        if check_plate_in_database(detection_state["license_plate"]):
+                        if detection_state["plate_known"]:
                             open_gate()
                             time.sleep(2)  # Short delay before closing gate
                             close_gate()
@@ -285,6 +341,14 @@ atexit.register(cleanup_resources)
 
 if __name__ == "__main__":
     try:
+        # # Optionally, test the database connection on startup
+        # test_db_connection = get_db_connection()
+        # if test_db_connection:
+        #     logging.info("Database connection established successfully.")
+        #     test_db_connection.close()
+        # else:
+        #     logging.error("Failed to establish database connection on startup.")
+
         app.run(debug=False, use_reloader=False, host='0.0.0.0', port=5000)
     except KeyboardInterrupt:
         logging.info("Application interrupted by user.")
