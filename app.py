@@ -14,14 +14,23 @@ app = Flask(__name__)
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s:%(message)s')
 
-# GPIO Configuration
-SERVO_PIN = 11  # BOARD numbering
-GPIO.setmode(GPIO.BOARD)
+# GPIO Configuration using BCM numbering
+SERVO_PIN = 17  # BCM GPIO 17 (BOARD Pin 11)
+TRIG = 11       # BCM GPIO 11 (BOARD Pin 23)
+ECHO = 8        # BCM GPIO 8  (BOARD Pin 24)
+
+GPIO.setmode(GPIO.BCM)
 GPIO.setup(SERVO_PIN, GPIO.OUT)
+GPIO.setup(TRIG, GPIO.OUT)
+GPIO.setup(ECHO, GPIO.IN)
 
 # Initialize PWM on the servo pin at 50Hz
 servo_pwm = GPIO.PWM(SERVO_PIN, 50)
 servo_pwm.start(0)  # Initialize with 0 duty cycle
+
+# Initialize TRIG to LOW
+GPIO.output(TRIG, False)
+time.sleep(0.1)  # Short delay to stabilize
 
 # Lock for thread-safe GPIO operations
 gpio_lock = Lock()
@@ -51,36 +60,75 @@ detection_state = {
     "is_running": True
 }
 
-# Proximity Sensor Dummy Function
-def check_proximity():
-    detection_state["status"] = "Checking proximity sensor..."
-    distance = random.uniform(0, 5)  # Random distance between 0 and 5 meters
-    logging.info(f"Sensor distance: {distance:.2f} meters")
-    if distance <= 3:
-        detection_state["status"] = "Vehicle detected."
-        return True
-    else:
-        detection_state["status"] = "No vehicle detected."
-        return False
+# Real Proximity Sensor Function
+def measure_distance():
+    """
+    Measures the distance using an ultrasonic sensor.
+    Returns distance in meters if successful, otherwise None.
+    """
+    with gpio_lock:
+        GPIO.output(TRIG, False)
+    time.sleep(0.1)  # Short delay to stabilize
 
-# Real Camera Capture Function
+    with gpio_lock:
+        GPIO.output(TRIG, True)
+    time.sleep(0.00001)  # 10 microseconds
+    with gpio_lock:
+        GPIO.output(TRIG, False)
+
+    pulse_start = None
+    pulse_end = None
+
+    # Start time for timeout
+    start_time = time.time()
+
+    # Wait for ECHO to go HIGH
+    while GPIO.input(ECHO) == 0:
+        pulse_start = time.time()
+        if pulse_start - start_time > 1:
+            logging.warning("Timeout waiting for ECHO to go HIGH")
+            return None
+
+    # Reset start_time for the next timeout
+    start_time = time.time()
+
+    # Wait for ECHO to go LOW
+    while GPIO.input(ECHO) == 1:
+        pulse_end = time.time()
+        if pulse_end - start_time > 1:
+            logging.warning("Timeout waiting for ECHO to go LOW")
+            return None
+
+    # Calculate pulse duration
+    pulse_duration = pulse_end - pulse_start
+    logging.debug(f"Pulse duration: {pulse_duration} seconds")
+
+    # Calculate distance (speed of sound = 34300 cm/s)
+    distance_cm = pulse_duration * 17150  # 17150 = 34300 / 2
+    distance_cm = round(distance_cm, 2)
+    distance_m = distance_cm / 100  # Convert to meters
+    logging.info(f"Measured Distance: {distance_m} meters")
+    return distance_m
+
+
+# Replace Dummy Proximity Sensor Function with Real Function
 def capture_image():
     detection_state["status"] = "Capturing image..."
     logging.info("Starting image capture")
-    
+
     # Generate a unique filename based on the current timestamp
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"car_{timestamp}.jpg"
     filepath = os.path.join("static", "images", filename)
-    
+
     try:
         # Capture the image and save it to the specified filepath
         picam2.capture_file(filepath)
         logging.info(f"Image captured and saved as {filename}")
-        
+
         # Update the detection state with the new image path
         detection_state["image"] = f"/static/images/{filename}"
-        
+
         # For demonstration, randomly assign a license plate (remove if using actual OCR)
         selected_data = random.choice(test_data)
         # detection_state["license_plate"] = selected_data["license_plate"]
@@ -89,17 +137,16 @@ def capture_image():
         logging.error(f"Error capturing image: {e}")
         detection_state["status"] = "Image capture failed."
         return None
-
 # Processing Image Dummy Function
 def process_image(image_path):
     detection_state["status"] = "Processing image..."
     logging.info(f"Processing image: {image_path}")
     time.sleep(4)  # Simulate delay for processing
-    
+
     # Simulate license plate recognition (replace with actual OCR in production)
     selected_data = next((data for data in test_data if data["image"] == image_path), None)
     detection_state["license_plate"] = selected_data["license_plate"] if selected_data else "Unknown Plate"
-    
+
     # Check if the plate is known
     detection_state["plate_known"] = detection_state["license_plate"] in known_plates
     plate_status = "Known" if detection_state["plate_known"] else "Unknown"
@@ -162,25 +209,33 @@ def main_flow():
 
             time.sleep(5)  # Simulate delay for waiting
 
-            if check_proximity():
-                time.sleep(2)  # Simulate delay for proximity check
-                captured_data = capture_image()
-                if captured_data:
-                    time.sleep(2)  # Simulate delay for capturing image
-                    process_image(captured_data["image"])
-                    time.sleep(1)  # Short delay before checking database
+            distance = measure_distance()
+            if distance is not None:
+                # logging.info(f"Measured Distance: {distance} meters")
+                if distance <= 0.2:  # Threshold distance in meters
+                    detection_state["status"] = "Vehicle detected."
+                    time.sleep(2)  # Simulate delay for proximity check
+                    captured_data = capture_image()
+                    if captured_data:
+                        time.sleep(2)  # Simulate delay for capturing image
+                        process_image(captured_data["image"])
+                        time.sleep(1)  # Short delay before checking database
 
-                    # Check license plate in database
-                    if check_plate_in_database(detection_state["license_plate"]):
-                        open_gate()
-                        time.sleep(2)  # Short delay before closing gate
-                        close_gate()
-                    else:
-                        logging.warning("License plate not recognized. Gate remains closed.")
-                        with gpio_lock:
-                            detection_state["gate_status"] = "Gate Closed - Unknown Plate"
+                        # Check license plate in database
+                        if check_plate_in_database(detection_state["license_plate"]):
+                            open_gate()
+                            time.sleep(2)  # Short delay before closing gate
+                            close_gate()
+                        else:
+                            logging.warning("License plate not recognized. Gate remains closed.")
+                            with gpio_lock:
+                                detection_state["gate_status"] = "Gate Closed - Unknown Plate"
+                else:
+                    detection_state["status"] = "No vehicle detected."
+                    logging.info("No vehicle within threshold distance.")
             else:
-                logging.info("No vehicle detected. Resetting.")
+                detection_state["status"] = "Proximity sensor error."
+                logging.warning("Failed to measure distance.")
         else:
             with gpio_lock:
                 detection_state["status"] = "Detection stopped."

@@ -4,7 +4,7 @@ execute these Commands in terminal:
 python3 -m venv --system-site-packages venv
 source venv/bin/activate
 pip install -r requirements.txt
-python3 app.py
+python app.py
 
 
 The server will start, and you can access the app at:
